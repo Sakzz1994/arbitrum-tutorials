@@ -33,8 +33,8 @@
   "dependencies": {
     "@arbitrum/sdk": "^4.0.1",
     "@nomiclabs/hardhat-ethers": "^2.2.3",
-    "ethers": "^5.7.2",
-    "hardhat": "^2.13.1",
+    "ethers": "^6.0.0",
+    "hardhat": "^3.0.0",
     "dotenv": "^16.4.5"
   },
   "workspaces": {
