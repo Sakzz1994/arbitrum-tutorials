@@ -1,0 +1,131 @@
+// Socket Community Patch: https://socket.dev
+// Date: Wed, 28 Jan 2026 23:25:31 GMT
+// For more information see https://socket.dev/patch/66044c88-bc26-4c9b-8fcf-4dfeea7d2341
+// This file includes modifications made by Socket, Inc. on Wed, 28 Jan 2026; these modifications are called the "Patch". In some cases, Socket may be required to make the Patch available to you under specific terms, or may be prohibited from restricting certain rights you may have. For example, the terms of another applicable license may require Socket to make the Patch available under specific terms. In those cases, the Patch is made available to you under the required terms, and Socket does not seek to restrict your rights relative to the Patch where prohibited. In all other cases, the Patch is available to you exclusively under the PolyForm Shield License 1.0.0 (https://polyformproject.org/licenses/shield/1.0.0/). The Patch was distributed by Socket with additional information concerning licensing, attribution, and limitation of liability which may be relevant to you and your use of the Patch. As far as the law allows, the Patch and the software including the patch come as is, without any warranty or condition, and Socket will not be liable to you for any damages arising out of the applicable license terms or the use or nature of the Patch or the software including the patch, under any kind of legal claim.
+// Original License: MIT
+
+'use strict';
+
+var md5 = require('create-hash/md5')
+var RIPEMD160 = require('ripemd160')
+var sha = require('sha.js')
+var Buffer = require('safe-buffer').Buffer
+
+var checkParameters = require('./precondition')
+var defaultEncoding = require('./default-encoding')
+var toBuffer = require('./to-buffer')
+
+var ZEROS = Buffer.alloc(128)
+var sizes = {
+  __proto__: null,
+  md5: 16,
+  sha1: 20,
+  sha224: 28,
+  sha256: 32,
+  sha384: 48,
+  sha512: 64,
+  'sha512-256': 32,
+  ripemd160: 20,
+  rmd160: 20
+};
+
+var mapping = {
+  __proto__: null,
+  'sha-1': 'sha1',
+  'sha-224': 'sha224',
+  'sha-256': 'sha256',
+  'sha-384': 'sha384',
+  'sha-512': 'sha512',
+  'ripemd-160': 'ripemd160'
+};
+
+function rmd160Func (data) {
+  return new RIPEMD160().update(data).digest()
+}
+
+function getDigest (alg) {
+  function shaFunc (data) {
+    return sha(alg).update(data).digest()
+  }
+
+  if (alg === 'rmd160' || alg === 'ripemd160') return rmd160Func
+  if (alg === 'md5') return md5
+  return shaFunc
+}
+
+function Hmac (alg, key, saltLen) {
+  var hash = getDigest(alg)
+  var blocksize = alg === 'sha512' || alg === 'sha384' ? 128 : 64
+
+  if (key.length > blocksize) {
+    key = hash(key)
+  } else if (key.length < blocksize) {
+    key = Buffer.concat([key, ZEROS], blocksize)
+  }
+
+  var ipad = Buffer.allocUnsafe(blocksize + sizes[alg])
+  var opad = Buffer.allocUnsafe(blocksize + sizes[alg])
+  for (var i = 0; i < blocksize; i++) {
+    ipad[i] = key[i] ^ 0x36
+    opad[i] = key[i] ^ 0x5C
+  }
+
+  var ipad1 = Buffer.allocUnsafe(blocksize + saltLen + 4)
+  ipad.copy(ipad1, 0, 0, blocksize)
+  this.ipad1 = ipad1
+  this.ipad2 = ipad
+  this.opad = opad
+  this.alg = alg
+  this.blocksize = blocksize
+  this.hash = hash
+  this.size = sizes[alg]
+}
+
+Hmac.prototype.run = function (data, ipad) {
+  data.copy(ipad, this.blocksize)
+  var h = this.hash(ipad)
+  h.copy(this.opad, this.blocksize)
+  return this.hash(this.opad)
+}
+
+function pbkdf2 (password, salt, iterations, keylen, digest) {
+  checkParameters(iterations, keylen)
+  password = toBuffer(password, defaultEncoding, 'Password')
+  salt = toBuffer(salt, defaultEncoding, 'Salt')
+
+  var lowerDigest = (digest || 'sha1').toLowerCase()
+  var mappedDigest = mapping[lowerDigest] || lowerDigest
+  var size = sizes[mappedDigest]
+  if (typeof size !== 'number' || !size) {
+    throw new TypeError('Digest algorithm not supported: ' + digest)
+  }
+
+  var hmac = new Hmac(mappedDigest, password, salt.length)
+
+  var DK = Buffer.allocUnsafe(keylen)
+  var block1 = Buffer.allocUnsafe(salt.length + 4)
+  salt.copy(block1, 0, 0, salt.length)
+
+  var destPos = 0
+  var hLen = size
+  var l = Math.ceil(keylen / hLen)
+
+  for (var i = 1; i <= l; i++) {
+    block1.writeUInt32BE(i, salt.length)
+
+    var T = hmac.run(block1, hmac.ipad1)
+    var U = T
+
+    for (var j = 1; j < iterations; j++) {
+      U = hmac.run(U, hmac.ipad2)
+      for (var k = 0; k < hLen; k++) T[k] ^= U[k]
+    }
+
+    T.copy(DK, destPos)
+    destPos += hLen
+  }
+
+  return DK
+}
+
+module.exports = pbkdf2
